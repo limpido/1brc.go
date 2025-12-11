@@ -2,17 +2,35 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"log"
 	"maps"
 	"os"
 	"slices"
-	"strconv"
-	"strings"
 )
 
 type Data struct {
 	max, min, sum, count int64
+}
+
+func parseFloat(num []byte) int64 {
+	negative := false
+	var n int64
+	for _, c := range num {
+		if c == '-' {
+			negative = true
+			continue
+		}
+		if c == '.' {
+			continue
+		}
+		n = n*10 + int64(c-'0')
+	}
+	if negative {
+		return -n
+	}
+	return n
 }
 
 func main() {
@@ -26,31 +44,26 @@ func main() {
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := scanner.Text()
-		idx := strings.Index(line, ";")
+		line := scanner.Bytes()
+		idx := bytes.IndexByte(line, ';')
 		if idx == -1 {
 			continue
 		}
-		key := line[:idx]
-		temp, err := strconv.ParseFloat(line[idx+1:], 32)
-		if err != nil {
-			log.Printf("failed to parse float: %v\n", err)
-			continue
-		}
-		v := int64(temp * 10)
+		key := string(line[:idx])
+		temp := parseFloat(line[idx+1:])
 		if val, ok := m[key]; !ok {
 			d := Data{
-				max:   v,
-				min:   v,
-				sum:   v,
+				max:   temp,
+				min:   temp,
+				sum:   temp,
 				count: 1,
 			}
 			m[key] = d
 		} else {
 			d := Data{
-				max:   max(val.max, v),
-				min:   min(val.min, v),
-				sum:   val.sum + v,
+				max:   max(val.max, temp),
+				min:   min(val.min, temp),
+				sum:   val.sum + temp,
 				count: val.count + 1,
 			}
 			m[key] = d
