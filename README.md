@@ -42,5 +42,20 @@ Executed in   34.28 secs    fish           external
    usr time   53.75 secs  346.00 micros   53.75 secs
    sys time   11.85 secs    0.00 micros   11.85 secs
 ```
+
 ![Profile result for 4th Iteration](doc/profile_4.png)
 As a result, `mapassign_faststr` effectively disappeared in the graph. The improvement in execution time is marginal, since the optimization basically reduces the number of map writes at the cost of additional pointer dereferencing.
+
+A large portion of run time is attributed to `mallocgc`, the major caller of which is `slicebytetostring`. This is frequently invoked because a station name needs to be converted from `[]byte` to `string` so it can be used as a key in Go's built-in map. The conversion happens once per line, resulting in many short-lived string allocations.
+
+To eliminate the memory allocation overhead, I implemented a custom hash table that supports `[]byte` as key type. The table uses FNV-1a for hashing and linear probing for collision resolution. Eacy unique key is copied once into memory on first insertion, all subsequent lookups and updates operate directly on byte slices. This brings the total runtime down to ~16s.
+
+## 5th Iteration
+- Implement custom hash table where `[]byte` is used as keys
+```
+________________________________________________________
+Executed in   16.21 secs    fish           external
+   usr time   25.75 secs    0.00 micros   25.75 secs
+   sys time    6.92 secs  504.00 micros    6.92 secs
+```
+![Profile result for 5th Iteration](doc/profile_5.png)

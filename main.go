@@ -3,12 +3,70 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"hash/fnv"
 	"log"
-	"maps"
 	"os"
 	"runtime/pprof"
 	"slices"
 )
+
+const (
+	HashTableSize = 2048
+)
+
+type HashTableEntry struct {
+	key []byte
+	val *Data
+}
+
+type HashTable struct {
+	size uint64
+	arr  []HashTableEntry
+}
+
+func hashBytes(data []byte) uint64 {
+	hasher := fnv.New64a()
+	hasher.Write(data)
+	return hasher.Sum64()
+}
+
+func (ht *HashTable) init() {
+	ht.size = HashTableSize
+	ht.arr = make([]HashTableEntry, HashTableSize)
+}
+
+func (ht *HashTable) insert(key []byte, val *Data) {
+	idx := hashBytes(key) % ht.size
+	i := idx
+	for {
+		if ht.arr[i].key != nil {
+			i++
+			if i == ht.size {
+				i = 0
+			}
+			continue
+		}
+		copyKey := make([]byte, len(key))
+		copy(copyKey, key)
+		ht.arr[i] = HashTableEntry{copyKey, val}
+		break
+	}
+}
+
+func (ht *HashTable) get(key []byte) (*Data, bool) {
+	idx := hashBytes(key) % ht.size
+	i := idx
+	for ht.arr[i].key != nil {
+		if bytes.Equal(key, ht.arr[i].key) {
+			return ht.arr[i].val, true
+		}
+		i++
+		if i == ht.size {
+			i = 0
+		}
+	}
+	return nil, false
+}
 
 type Data struct {
 	max, min, sum, count int64
@@ -33,7 +91,7 @@ func parseFloat(num []byte) int64 {
 	return n
 }
 
-func processChunk(f *os.File, startOffset, chunkSize int64, ch chan map[string]*Data) {
+func processChunk(f *os.File, startOffset, chunkSize int64, ch chan *HashTable) {
 	buf := make([]byte, chunkSize)
 	n, err := f.ReadAt(buf, startOffset)
 	if err != nil {
@@ -41,7 +99,8 @@ func processChunk(f *os.File, startOffset, chunkSize int64, ch chan map[string]*
 		return
 	}
 
-	m := make(map[string]*Data)
+	m := new(HashTable)
+	m.init()
 	l := 0
 	if startOffset > 0 {
 		// start after the first '\n'
@@ -58,15 +117,15 @@ func processChunk(f *os.File, startOffset, chunkSize int64, ch chan map[string]*
 		if idx == -1 {
 			continue
 		}
-		key := string(buf[l : idx+l])
+		key := buf[l : idx+l]
 		temp := parseFloat(buf[idx+l+1 : r])
-		if cur, ok := m[key]; !ok {
-			m[key] = &Data{
+		if cur, ok := m.get(key); !ok {
+			m.insert(key, &Data{
 				max:   temp,
 				min:   temp,
 				sum:   temp,
 				count: 1,
-			}
+			})
 		} else {
 			cur.max = max(cur.max, temp)
 			cur.min = min(cur.min, temp)
@@ -104,15 +163,15 @@ func processChunk(f *os.File, startOffset, chunkSize int64, ch chan map[string]*
 	if len(leftover) > 0 {
 		idx := bytes.IndexByte(leftover, ';')
 		if idx != -1 {
-			key := string(leftover[:idx])
+			key := leftover[:idx]
 			temp := parseFloat(leftover[idx+1:])
-			if cur, ok := m[key]; !ok {
-				m[key] = &Data{
+			if cur, ok := m.get(key); !ok {
+				m.insert(key, &Data{
 					max:   temp,
 					min:   temp,
 					sum:   temp,
 					count: 1,
-				}
+				})
 			} else {
 				cur.max = max(cur.max, temp)
 				cur.min = min(cur.min, temp)
@@ -144,12 +203,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := map[string]*Data{}
+	m := new(HashTable)
+	m.init()
 
 	// divide file into chunks
 	// process concurrently with goroutines
 	numWorkers := 8
-	ch := make(chan map[string]*Data)
+	ch := make(chan *HashTable)
 	defer close(ch)
 	chunkSize := fileInfo.Size() / int64(numWorkers)
 	for i := 0; i < numWorkers; i++ {
@@ -161,14 +221,17 @@ func main() {
 	for partialM := range ch {
 		numWorkers--
 		// merge maps
-		for k, v := range partialM {
-			if cur, ok := m[k]; !ok {
-				m[k] = v
+		for _, htEntry := range partialM.arr {
+			if htEntry.key == nil {
+				continue
+			}
+			if cur, ok := m.get(htEntry.key); !ok {
+				m.insert(htEntry.key, htEntry.val)
 			} else {
-				cur.max = max(cur.max, v.max)
-				cur.min = min(cur.min, v.min)
-				cur.sum += v.sum
-				cur.count += v.count
+				cur.max = max(cur.max, htEntry.val.max)
+				cur.min = min(cur.min, htEntry.val.min)
+				cur.sum += htEntry.val.sum
+				cur.count += htEntry.val.count
 			}
 		}
 		if numWorkers == 0 {
@@ -182,10 +245,19 @@ func main() {
 		log.Fatalf("failed to create output file: %v\n", err)
 	}
 	defer outF.Close()
-	for _, k := range slices.Sorted(maps.Keys(m)) {
-		v := m[k]
-		avg := float64(v.sum) / float64(v.count) / 10.0
-		line := fmt.Sprintf("%s;%.1f;%.1f;%.1f\n", k, float64(v.max)/10.0, float64(v.min)/10.0, avg)
+
+	// sort by key
+	slices.SortFunc(m.arr, func(e1, e2 HashTableEntry) int {
+		return bytes.Compare(e1.key, e2.key)
+	})
+
+	for _, entry := range m.arr {
+		if entry.key == nil {
+			continue
+		}
+		avg := float64(entry.val.sum) / float64(entry.val.count) / 10.0
+		line := fmt.Sprintf("%s;%.1f;%.1f;%.1f\n", string(entry.key),
+			float64(entry.val.max)/10.0, float64(entry.val.min)/10.0, avg)
 		_, err := outF.WriteString(line)
 		if err != nil {
 			log.Fatalf("failed to write to output file: %v\n", err)
