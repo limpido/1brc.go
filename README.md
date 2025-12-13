@@ -68,7 +68,7 @@ Executed in   16.21 secs    fish           external
 
 ## Takeaways
 So this is what I end up with! I'm still very much a beginner in Go and this challenge pushed me far beyond what I expected when I first started. Here are the key takeaways I learned from attempting this challenge:
-- When aiming for speed, functions and data structures tailored to a specific data format yield better performance than the standard library functions built to be flexible generic for everyone.
+- When aiming for speed, functions and data structures tailored to a specific data format yield better performance than the standard library one built to be flexible and generic for everyone.
 - Floating point parsing is expensive. `strconv.ParseFloat` handles many edge cases that are unnecessary for this dataset. Given the fixed data format in this challenge, parsing the bytes manually and converting the temperatures to scaled integers for arithmetic operations is far more efficient.
 - While `bufio.Scanner` is easy to use, `scanner.Text()` allocates a new string for every single line and creates massive overhead for the GC. Low-level I/O like `Read` eliminates those allocations and offers more control over memory.
 - Concurrency works best when work is decoupled. When trying to implement concurrency, my initial instinct was to use a shared map with a Mutex, but that creates a bottleneck, since only one goroutine gets to access the map, while all the others are forced to wait. Giving each goroutine its own isolated hash table via sharding allowed them to work independently without waiting on each other.
