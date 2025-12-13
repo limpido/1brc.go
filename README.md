@@ -48,7 +48,13 @@ As a result, `mapassign_faststr` effectively disappeared in the graph. The impro
 
 A large portion of run time is attributed to `mallocgc`, the major caller of which is `slicebytetostring`. This is frequently invoked because a station name needs to be converted from `[]byte` to `string` so it can be used as a key in Go's built-in map. The conversion happens once per line, resulting in many short-lived string allocations.
 
-To eliminate the memory allocation overhead, I implemented a custom hash table that supports `[]byte` as key type. The table uses FNV-1a for hashing and linear probing for collision resolution. Eacy unique key is copied once into memory on first insertion, all subsequent lookups and updates operate directly on byte slices. This brings the total runtime down to ~16s.
+To eliminate the memory allocation overhead, I implemented a custom hash table that supports `[]byte` as key type. The table uses FNV-1a for hashing and linear probing for collision resolution. Each unique key is copied once into memory on first insertion, all subsequent lookups and updates operate directly on byte slices. This brings the total runtime down to ~16s.
+
+P.S. To determine the size of hash table, I checked the number of unique stations in the input data:
+```sh
+> cut -d';' -f1 measurements.txt | sort -u | wc -l
+413
+```
 
 ## 5th Iteration
 - Implement custom hash table where `[]byte` is used as keys
@@ -59,3 +65,18 @@ Executed in   16.21 secs    fish           external
    sys time    6.92 secs  504.00 micros    6.92 secs
 ```
 ![Profile result for 5th Iteration](doc/profile_5.png)
+
+## Takeaways
+So this is what I end up with! I'm still very much a beginner in Go and this challenge pushed me far beyond what I expected when I first started. Here are the key takeaways I learned from attempting this challenge:
+- When aiming for speed, functions and data structures tailored to a specific data format yield better performance than the standard library functions built to be flexible generic for everyone.
+- Floating point parsing is expensive. `strconv.ParseFloat` handles many edge cases that are unnecessary for this dataset. Given the fixed data format in this challenge, parsing the bytes manually and converting the temperatures to scaled integers for arithmetic operations is far more efficient.
+- While `bufio.Scanner` is easy to use, `scanner.Text()` allocates a new string for every single line and creates massive overhead for the GC. Low-level I/O like `Read` eliminates those allocations and offers more control over memory.
+- Concurrency works best when work is decoupled. When trying to implement concurrency, my initial instinct was to use a shared map with a Mutex, but that creates a bottleneck, since only one goroutine gets to access the map, while all the others are forced to wait. Giving each goroutine its own isolated hash table via sharding allowed them to work independently without waiting on each other.
+- Profiling is essential for identifying bottlenecks and pointing the way toward effective performance optimizations.
+
+## Further Optimisation Ideas
+Although late to the party, I went to read some [nice](https://www.bytesizego.com/blog/one-billion-row-challenge-go) [writeups](https://benhoyt.com/writings/go-1brc/) about solving this challenge in Go and collected some ideas that can be further explored:
+- Build a custom hashing algorithm instead of using the one provided by the library
+- Inline the functions to eliminate the overhead of function calls
+- Spawn the number of goroutines based on the number of CPU cores (`runtime.NumCPU()`) to fully utilize the available resources
+- Map the file into memory with `mmap` to bypass standard I/O streams for maximum read performance
