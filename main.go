@@ -33,7 +33,7 @@ func parseFloat(num []byte) int64 {
 	return n
 }
 
-func processChunk(f *os.File, startOffset, chunkSize int64, ch chan map[string]Data) {
+func processChunk(f *os.File, startOffset, chunkSize int64, ch chan map[string]*Data) {
 	buf := make([]byte, chunkSize)
 	n, err := f.ReadAt(buf, startOffset)
 	if err != nil {
@@ -41,7 +41,7 @@ func processChunk(f *os.File, startOffset, chunkSize int64, ch chan map[string]D
 		return
 	}
 
-	m := make(map[string]Data)
+	m := make(map[string]*Data)
 	l := 0
 	if startOffset > 0 {
 		// start after the first '\n'
@@ -60,22 +60,18 @@ func processChunk(f *os.File, startOffset, chunkSize int64, ch chan map[string]D
 		}
 		key := string(buf[l : idx+l])
 		temp := parseFloat(buf[idx+l+1 : r])
-		if val, ok := m[key]; !ok {
-			d := Data{
+		if cur, ok := m[key]; !ok {
+			m[key] = &Data{
 				max:   temp,
 				min:   temp,
 				sum:   temp,
 				count: 1,
 			}
-			m[key] = d
 		} else {
-			d := Data{
-				max:   max(val.max, temp),
-				min:   min(val.min, temp),
-				sum:   val.sum + temp,
-				count: val.count + 1,
-			}
-			m[key] = d
+			cur.max = max(cur.max, temp)
+			cur.min = min(cur.min, temp)
+			cur.sum += temp
+			cur.count++
 		}
 		l = r + 1
 	}
@@ -110,10 +106,18 @@ func processChunk(f *os.File, startOffset, chunkSize int64, ch chan map[string]D
 		if idx != -1 {
 			key := string(leftover[:idx])
 			temp := parseFloat(leftover[idx+1:])
-			if val, ok := m[key]; !ok {
-				m[key] = Data{max: temp, min: temp, sum: temp, count: 1}
+			if cur, ok := m[key]; !ok {
+				m[key] = &Data{
+					max:   temp,
+					min:   temp,
+					sum:   temp,
+					count: 1,
+				}
 			} else {
-				m[key] = Data{max: max(val.max, temp), min: min(val.min, temp), sum: val.sum + temp, count: val.count + 1}
+				cur.max = max(cur.max, temp)
+				cur.min = min(cur.min, temp)
+				cur.sum += temp
+				cur.count++
 			}
 		}
 	}
@@ -140,12 +144,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := map[string]Data{}
+	m := map[string]*Data{}
 
 	// divide file into chunks
 	// process concurrently with goroutines
 	numWorkers := 8
-	ch := make(chan map[string]Data)
+	ch := make(chan map[string]*Data)
 	defer close(ch)
 	chunkSize := fileInfo.Size() / int64(numWorkers)
 	for i := 0; i < numWorkers; i++ {
@@ -161,12 +165,10 @@ func main() {
 			if cur, ok := m[k]; !ok {
 				m[k] = v
 			} else {
-				m[k] = Data{
-					max:   max(cur.max, v.max),
-					min:   min(cur.min, v.min),
-					sum:   cur.sum + v.sum,
-					count: cur.count + v.count,
-				}
+				cur.max = max(cur.max, v.max)
+				cur.min = min(cur.min, v.min)
+				cur.sum += v.sum
+				cur.count += v.count
 			}
 		}
 		if numWorkers == 0 {
