@@ -73,6 +73,7 @@ So this is what I end up with! I'm still very much a beginner in Go and this cha
 - While `bufio.Scanner` is easy to use, `scanner.Text()` allocates a new string for every single line and creates massive overhead for the GC. Low-level I/O like `Read` eliminates those allocations and offers more control over memory.
 - Concurrency works best when work is decoupled. When trying to implement concurrency, my initial instinct was to use a shared map with a Mutex, but that creates a bottleneck, since only one goroutine gets to access the map, while all the others are forced to wait. Giving each goroutine its own isolated hash table via sharding allowed them to work independently without waiting on each other.
 - Profiling is essential for identifying bottlenecks and pointing the way toward effective performance optimizations.
+- Requesting memory in powers of two is more efficient than using round decimal numbers, because it aligns with OS's 4KB page size and allows complicated arithmetic operations to be replaced with faster bitwise instructions.
 - Understanding what happens at a low level (I/O, memory allocation, GC, cache locality, pointer dereferencing, ...) is crucial for unlocking real performance gains.
 
 ## Further Optimisation Ideas
