@@ -4,14 +4,16 @@ import (
 	"bytes"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"slices"
 )
 
 const (
-	HashTableSize = 2048
+	HashTableSize = 1 << 15
 )
 
 type HashTableEntry struct {
@@ -93,18 +95,19 @@ func parseFloat(num []byte) int64 {
 
 func processChunk(f *os.File, startOffset, chunkSize int64, ch chan *HashTable) {
 	buf := make([]byte, chunkSize)
+	// ReadAt may return io.EOF
+	// when the chunk ends exactly at the end of the file
 	n, err := f.ReadAt(buf, startOffset)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		log.Fatalf("error reading file: %v\n", err)
-		return
 	}
 
 	m := new(HashTable)
 	m.init()
 	l := 0
 	if startOffset > 0 {
-		// start after the first '\n'
 		idx := bytes.IndexByte(buf, '\n')
+		// skip the partial line, start parsing after the first \n
 		if idx != -1 {
 			l = idx + 1
 		}
@@ -115,6 +118,7 @@ func processChunk(f *os.File, startOffset, chunkSize int64, ch chan *HashTable) 
 		}
 		idx := bytes.IndexByte(buf[l:r], ';')
 		if idx == -1 {
+			l = r + 1
 			continue
 		}
 		key := buf[l : idx+l]
@@ -146,16 +150,16 @@ func processChunk(f *os.File, startOffset, chunkSize int64, ch chan *HashTable) 
 	curPos := startOffset + chunkSize
 	for {
 		n, err := f.ReadAt(tmpBuf, curPos)
-		if n == 0 || err != nil {
-			break
-		}
-		idx := bytes.IndexByte(tmpBuf[:n], '\n')
-		if idx == -1 {
-			leftover = append(leftover, tmpBuf...)
+		if n > 0 {
+			idx := bytes.IndexByte(tmpBuf[:n], '\n')
+			if idx != -1 {
+				leftover = append(leftover, tmpBuf[:idx]...)
+				break
+			}
+			leftover = append(leftover, tmpBuf[:n]...)
 			curPos += int64(n)
-			continue
-		} else {
-			leftover = append(leftover, tmpBuf[:idx]...)
+		}
+		if err != nil {
 			break
 		}
 	}
@@ -185,7 +189,11 @@ func processChunk(f *os.File, startOffset, chunkSize int64, ch chan *HashTable) 
 }
 
 func main() {
-	prof, _ := os.Create("cpu.prof")
+	prof, err := os.Create("cpu.prof")
+	if err != nil {
+		log.Fatalf("failed to create profile file: %v\n", err)
+	}
+	defer prof.Close()
 	pprof.StartCPUProfile(prof)
 	defer pprof.StopCPUProfile()
 
@@ -193,14 +201,12 @@ func main() {
 	f, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("failed to open file: %v\n", err)
-		os.Exit(1)
 	}
 	defer f.Close()
 
 	fileInfo, err := os.Stat(filename)
 	if err != nil {
 		log.Fatalf("Error getting file info: %v\n", err)
-		os.Exit(1)
 	}
 
 	m := new(HashTable)
@@ -208,13 +214,18 @@ func main() {
 
 	// divide file into chunks
 	// process concurrently with goroutines
-	numWorkers := 8
+	numWorkers := runtime.NumCPU()
 	ch := make(chan *HashTable)
 	defer close(ch)
 	chunkSize := fileInfo.Size() / int64(numWorkers)
 	for i := 0; i < numWorkers; i++ {
 		startOffset := int64(i) * chunkSize
-		go processChunk(f, startOffset, chunkSize, ch)
+		size := chunkSize
+		// give the last worker everything to EOF
+		if i == numWorkers-1 {
+			size = fileInfo.Size() - startOffset
+		}
+		go processChunk(f, startOffset, size, ch)
 	}
 
 	// read result from the channel

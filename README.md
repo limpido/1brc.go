@@ -12,7 +12,9 @@ Executed in   73.42 secs    fish           external
 
 ## 2nd Iteration
 - Change `scanner.Text()` to `scanner.Bytes()`
+  `scanner.Text()` is essentially equivalent to `string(scanner.Bytes())`, using the latter avoids a memory allocation for the string and a conversion from `[]byte` to `string`
 - Replace `ParseFloat()` with manual parsing
+  `strconv.ParseFloat()` is a general-purpose parser that handles edge cases like leading/trailing spaces, exponents, NaN etc. Since the input format is fixed here (signed decimal number with one decimal place), we can build a specialized parser tailored to this format. The parser returns an integer, the tenths of the floating point number, replacing floating point arithmetic with fast integer operations
 ```
 ________________________________________________________
 Executed in   62.57 secs    fish           external
